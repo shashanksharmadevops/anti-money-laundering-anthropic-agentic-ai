@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AML Investigation Copilot — Case Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+  :root {
+    --ink: #1B1D22;
+    --ink-soft: #262932;
+    --panel: #F3EFE6;
+    --panel-line: #DCD5C4;
+    --text-on-ink: #EAE6DC;
+    --text-muted: #9A9587;
+    --text-on-panel: #26241D;
+    --critical: #B0402C;
+    --high: #C97A2C;
+    --medium: #B8960C;
+    --low: #4B7A62;
+    --confirmed: #B0402C;
+    --review: #C97A2C;
+    --clear: #4B7A62;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--text-on-ink);
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 14px;
+  }
+  .layout { display: grid; grid-template-columns: 300px 1fr; min-height: 100vh; }
+
+  /* --- Sidebar: case queue --- */
+  .sidebar { background: var(--ink-soft); border-right: 1px solid #33363F; padding: 24px 0; }
+  .sidebar-header {
+    padding: 0 20px 20px 20px; border-bottom: 1px solid #33363F; margin-bottom: 8px;
+  }
+  .sidebar-header .stamp {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.12em;
+    color: var(--text-muted); text-transform: uppercase;
+  }
+  .sidebar-header h1 {
+    font-family: 'IBM Plex Serif', serif; font-size: 19px; font-weight: 600; margin: 6px 0 0 0;
+  }
+  .case-item {
+    padding: 14px 20px; border-left: 3px solid transparent; cursor: pointer;
+    border-bottom: 1px solid #2C2F38;
+  }
+  .case-item:hover { background: #2C2F38; }
+  .case-item.active { background: #2C2F38; border-left-color: var(--high); }
+  .case-item .case-id {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text-muted);
+  }
+  .case-item .case-name { font-weight: 500; margin: 3px 0; font-size: 13.5px; }
+  .priority-tag {
+    display: inline-block; font-size: 10px; font-family: 'IBM Plex Mono', monospace;
+    padding: 2px 7px; border-radius: 3px; letter-spacing: 0.05em; text-transform: uppercase;
+    margin-top: 4px;
+  }
+  .priority-Critical { background: rgba(176,64,44,0.2); color: #E8886F; }
+  .priority-High { background: rgba(201,122,44,0.2); color: #E8A96F; }
+  .priority-Medium { background: rgba(184,150,12,0.2); color: #E0C25E; }
+  .priority-Low { background: rgba(75,122,98,0.2); color: #86BFA1; }
+
+  /* --- Main panel --- */
+  .main { padding: 32px 40px; max-width: 1080px; }
+  .empty-state { color: var(--text-muted); font-family: 'IBM Plex Serif', serif; font-size: 16px; margin-top: 100px; text-align: center; }
+
+  .case-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
+  .case-header .case-number {
+    font-family: 'IBM Plex Mono', monospace; color: var(--text-muted); font-size: 12px; letter-spacing: 0.1em;
+  }
+  .case-header h2 { font-family: 'IBM Plex Serif', serif; font-size: 26px; margin: 4px 0; }
+  .case-header .alert-summary { color: var(--text-muted); font-size: 13.5px; max-width: 640px; }
+
+  .run-btn {
+    background: var(--high); color: #1B1D22; border: none; padding: 11px 22px; border-radius: 4px;
+    font-family: 'IBM Plex Sans', sans-serif; font-weight: 600; font-size: 13.5px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .run-btn:hover { background: #DB8A3C; }
+  .run-btn:disabled { background: #4A4D56; color: var(--text-muted); cursor: not-allowed; }
+
+  .tabs { display: flex; gap: 4px; margin: 20px 0 0 0; border-bottom: 1px solid #33363F; }
+  .tab { padding: 10px 16px; font-size: 13px; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; }
+  .tab.active { color: var(--text-on-ink); border-bottom-color: var(--high); }
+  .tab-content { display: none; padding-top: 20px; }
+  .tab-content.active { display: block; }
+
+  /* Evidence trail */
+  .tool-call {
+    background: var(--panel); color: var(--text-on-panel); border-radius: 6px;
+    padding: 14px 16px; margin-bottom: 10px; font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+    border-left: 3px solid var(--panel-line);
+  }
+  .tool-call .fn-name { font-weight: 600; color: #6B5B2E; }
+  .tool-call pre { white-space: pre-wrap; word-break: break-word; margin: 8px 0 0 0; font-size: 11.5px; color: #4A4638; max-height: 160px; overflow-y: auto; }
+
+  /* Draft card */
+  .draft-card {
+    background: var(--panel); color: var(--text-on-panel); border-radius: 8px; padding: 24px;
+    font-family: 'IBM Plex Serif', serif;
+  }
+  .draft-card .risk-row { display: flex; gap: 24px; align-items: center; margin-bottom: 16px; font-family: 'IBM Plex Sans', sans-serif; }
+  .risk-badge { font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.04em; color: #fff; }
+  .risk-Critical, .risk-badge.crit { background: var(--critical); }
+  .risk-High { background: var(--high); }
+  .risk-Medium { background: var(--medium); }
+  .risk-Low { background: var(--low); }
+  .draft-card textarea {
+    width: 100%; min-height: 220px; font-family: 'IBM Plex Serif', serif; font-size: 14px;
+    line-height: 1.6; padding: 14px; border: 1px solid var(--panel-line); border-radius: 6px;
+    background: #FBF8F1; color: var(--text-on-panel); resize: vertical;
+  }
+  .decision-row { display: flex; gap: 10px; margin-top: 18px; font-family: 'IBM Plex Sans', sans-serif; }
+  .decision-btn {
+    padding: 10px 18px; border-radius: 5px; border: none; font-weight: 600; font-size: 13px; cursor: pointer;
+  }
+  .decision-btn.approve { background: var(--clear); color: #fff; }
+  .decision-btn.edit { background: var(--review); color: #1B1D22; }
+  .decision-btn.reject { background: var(--critical); color: #fff; }
+  .decision-note {
+    width: 100%; margin-top: 10px; padding: 8px 10px; border-radius: 5px; border: 1px solid var(--panel-line);
+    font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; background: #FBF8F1; color: var(--text-on-panel);
+  }
+  .decision-confirmation { margin-top: 14px; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; color: var(--clear); }
+
+  /* Network graph */
+  #network-svg { background: var(--panel); border-radius: 8px; }
+  .legend { display: flex; gap: 18px; margin-top: 10px; font-size: 12px; color: var(--text-muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+  .loading { color: var(--text-muted); font-family: 'IBM Plex Mono', monospace; font-size: 13px; padding: 20px 0; }
+</style>
+</head>
+<body>
+
+<div class="layout">
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div class="stamp">Case Queue</div>
+      <h1>AML Copilot</h1>
+    </div>
+    <div id="case-list"></div>
+  </div>
+
+  <div class="main" id="main-panel">
+    <div class="empty-state">Select a case from the queue to begin.</div>
+  </div>
+</div>
+
+<script>
+const API = "";
+let currentAlert = null;
+let currentResult = null;
+
+async function loadAlerts() {
+  const res = await fetch(`${API}/api/alerts`);
+  const alerts = await res.json();
+  const list = document.getElementById('case-list');
+  list.innerHTML = alerts.map(a => `
+    <div class="case-item" data-id="${a.alert_id}" onclick="selectCase('${a.alert_id}')">
+      <div class="case-id">${a.alert_id}</div>
+      <div class="case-name">${a.customer_name}</div>
+      <div style="font-size:12px;color:#9A9587;">${a.alert_type}</div>
+      <span class="priority-tag priority-${a.priority}">${a.priority}</span>
+    </div>
+  `).join('');
+}
+
+async function selectCase(alertId) {
+  currentAlert = alertId;
+  currentResult = null;
+  document.querySelectorAll('.case-item').forEach(el => el.classList.toggle('active', el.dataset.id === alertId));
+
+  const res = await fetch(`${API}/api/alerts/${alertId}`);
+  const alert = await res.json();
+
+  const main = document.getElementById('main-panel');
+  main.innerHTML = `
+    <div class="case-header">
+      <div>
+        <div class="case-number">${alert.alert_id} · ${alert.triggering_rule}</div>
+        <h2>${alert.alert_type}</h2>
+        <div class="alert-summary">${alert.summary}</div>
+      </div>
+      <button class="run-btn" id="run-btn" onclick="runInvestigation('${alertId}')">Run Investigation</button>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="evidence" onclick="switchTab('evidence')">Evidence Trail</div>
+      <div class="tab" data-tab="network" onclick="switchTab('network')">Network</div>
+      <div class="tab" data-tab="draft" onclick="switchTab('draft')">Draft SAR &amp; Decision</div>
+    </div>
+
+    <div class="tab-content active" id="tab-evidence">
+      <div class="loading">Run the investigation to see the agent's evidence-gathering trail.</div>
+    </div>
+    <div class="tab-content" id="tab-network">
+      <div class="loading">Loading network...</div>
+    </div>
+    <div class="tab-content" id="tab-draft">
+      <div class="loading">Run the investigation to generate a draft SAR for review.</div>
+    </div>
+  `;
+
+  loadNetwork(alert.customer_id);
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === `tab-${name}`));
+}
+
+async function runInvestigation(alertId) {
+  const btn = document.getElementById('run-btn');
+  btn.disabled = true;
+  btn.innerText = "Investigating...";
+  document.getElementById('tab-evidence').innerHTML = `<div class="loading">Agent is gathering evidence — calling tools...</div>`;
+
+  try {
+    const res = await fetch(`${API}/api/investigate/${alertId}`, { method: 'POST' });
+    const result = await res.json();
+    currentResult = result;
+    renderEvidence(result.audit_trail);
+    renderDraft(result);
+    switchTab('draft');
+  } catch (e) {
+    document.getElementById('tab-evidence').innerHTML = `<div class="loading">Investigation failed: ${e}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerText = "Re-run Investigation";
+  }
+}
+
+function renderEvidence(trail) {
+  const el = document.getElementById('tab-evidence');
+  if (!trail || trail.length === 0) {
+    el.innerHTML = `<div class="loading">No tool calls recorded.</div>`;
+    return;
+  }
+  el.innerHTML = trail.map((step, i) => `
+    <div class="tool-call">
+      <span class="fn-name">${i+1}. ${step.tool}</span>(${JSON.stringify(step.input)})
+      <pre>${JSON.stringify(step.output, null, 2)}</pre>
+    </div>
+  `).join('');
+}
+
+function renderDraft(result) {
+  const el = document.getElementById('tab-draft');
+  const riskClass = (result.recommended_action || '').toLowerCase().includes('dismiss') ? 'Low'
+                    : (result.risk_score >= 80 ? 'Critical' : result.risk_score >= 50 ? 'High' : 'Medium');
+  el.innerHTML = `
+    <div class="draft-card">
+      <div class="risk-row">
+        <span class="risk-badge risk-${riskClass}">Risk Score: ${result.risk_score ?? 'N/A'}</span>
+        <span><strong>Recommended:</strong> ${result.recommended_action ?? 'N/A'}</span>
+      </div>
+      <textarea id="narrative-box">${result.raw_text}</textarea>
+      <div class="decision-row">
+        <button class="decision-btn approve" onclick="submitDecision('approved')">Approve</button>
+        <button class="decision-btn edit" onclick="submitDecision('edited')">Save Edit</button>
+        <button class="decision-btn reject" onclick="submitDecision('rejected')">Reject</button>
+      </div>
+      <input class="decision-note" id="analyst-note" placeholder="Optional analyst note (why you approved/edited/rejected)..." />
+      <div id="decision-confirmation"></div>
+    </div>
+  `;
+}
+
+async function submitDecision(decision) {
+  if (!currentResult) return;
+  const finalNarrative = document.getElementById('narrative-box').value;
+  const notes = document.getElementById('analyst-note').value;
+
+  const payload = {
+    alert_id: currentResult.alert_id,
+    decision: decision,
+    agent_risk_score: currentResult.risk_score,
+    agent_recommendation: currentResult.recommended_action,
+    agent_narrative: currentResult.raw_text,
+    final_narrative: finalNarrative,
+    analyst_notes: notes,
+    tool_call_count: (currentResult.audit_trail || []).length,
+  };
+
+  const res = await fetch(`${API}/api/decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const entry = await res.json();
+  document.getElementById('decision-confirmation').innerText =
+    `Logged: ${entry.feedback_id} — decision "${entry.decision}" recorded at ${entry.timestamp}`;
+}
+
+async function loadNetwork(customerId) {
+  const el = document.getElementById('tab-network');
+  const res = await fetch(`${API}/api/network/${customerId}`);
+  const graph = await res.json();
+
+  el.innerHTML = `
+    <svg id="network-svg" width="100%" height="380" viewBox="0 0 900 380"></svg>
+    <div class="legend">
+      <span><span class="dot" style="background:#B0402C"></span>High/Critical risk</span>
+      <span><span class="dot" style="background:#B8960C"></span>Medium risk</span>
+      <span><span class="dot" style="background:#4B7A62"></span>Low risk</span>
+      <span><span class="dot" style="background:#5A5240; border-radius:2px;"></span>Business entity</span>
+    </div>
+  `;
+
+  const svg = d3.select("#network-svg");
+  const width = 900, height = 380;
+
+  const color = d => d.risk_rating === 'High' ? '#B0402C' : d.risk_rating === 'Medium' ? '#B8960C' : '#4B7A62';
+
+  const sim = d3.forceSimulation(graph.nodes)
+    .force("link", d3.forceLink(graph.edges).id(d => d.id).distance(160))
+    .force("charge", d3.forceManyBody().strength(-320))
+    .force("center", d3.forceCenter(width/2, height/2));
+
+  const link = svg.append("g").selectAll("line")
+    .data(graph.edges).enter().append("line")
+    .attr("stroke", "#B5AC96").attr("stroke-width", 1.5);
+
+  const linkLabel = svg.append("g").selectAll("text")
+    .data(graph.edges).enter().append("text")
+    .text(d => d.relationship_type)
+    .attr("font-size", 10).attr("fill", "#6B6656").attr("font-family", "IBM Plex Mono, monospace");
+
+  const node = svg.append("g").selectAll("g")
+    .data(graph.nodes).enter().append("g");
+
+  node.append(d => document.createElementNS("http://www.w3.org/2000/svg",
+    d.is_business_entity ? "rect" : "circle"));
+
+  node.selectAll("rect")
+    .attr("width", 26).attr("height", 26).attr("x", -13).attr("y", -13).attr("rx", 4)
+    .attr("fill", d => color(d))
+    .attr("stroke", d => d.is_center ? "#1B1D22" : "none").attr("stroke-width", 2);
+
+  node.selectAll("circle")
+    .attr("r", d => d.is_center ? 16 : 13)
+    .attr("fill", d => color(d))
+    .attr("stroke", d => d.is_center ? "#1B1D22" : "none").attr("stroke-width", 2);
+
+  node.append("text")
+    .text(d => d.label)
+    .attr("font-size", 11).attr("dy", 28).attr("text-anchor", "middle")
+    .attr("fill", "#26241D").attr("font-family", "IBM Plex Sans, sans-serif");
+
+  sim.on("tick", () => {
+    link.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+        .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+    linkLabel.attr("x", d => (d.source.x + d.target.x)/2).attr("y", d => (d.source.y + d.target.y)/2 - 6);
+    node.attr("transform", d => `translate(${d.x},${d.y})`);
+  });
+}
+
+loadAlerts();
+</script>
+</body>
+</html>
